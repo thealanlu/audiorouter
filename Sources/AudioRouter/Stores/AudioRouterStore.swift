@@ -551,12 +551,12 @@ public final class AudioRouterStore: ObservableObject {
 
     public func setDefaultDevice(_ device: AudioDevice) {
         if settings.demoMode {
-            devices = devices.map { copyDevice($0, isDefault: $0.kind == device.kind && $0.uid == device.uid) }
+            devices = devices.map { $0.kind == device.kind ? copyDevice($0, isDefault: $0.uid == device.uid) : $0 }
             return
         }
         do {
             try deviceManager.setDefaultDevice(uid: device.uid, kind: device.kind)
-            devices = devices.map { copyDevice($0, isDefault: $0.kind == device.kind && $0.uid == device.uid) }
+            devices = devices.map { $0.kind == device.kind ? copyDevice($0, isDefault: $0.uid == device.uid) : $0 }
             refreshAfterDelay()
         } catch {
             lastError = error.localizedDescription
@@ -1481,8 +1481,10 @@ public final class AudioRouterStore: ObservableObject {
         userProfileManager.delete(profile)
     }
 
-    public func saveCurrentSetup() {
-        presetManager.savePreset(currentSetupPreset(name: "Setup \(presetManager.presets.count + 1)"))
+    public func saveCurrentSetup(named name: String? = nil) {
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let presetName = trimmedName.isEmpty ? "Setup \(presetManager.presets.count + 1)" : trimmedName
+        presetManager.savePreset(currentSetupPreset(name: presetName))
     }
 
     public func saveSuggestedSetup(_ kind: SuggestedSetupKind) {

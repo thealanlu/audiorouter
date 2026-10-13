@@ -1,10 +1,13 @@
+import AppKit
 import SwiftUI
 
 public struct MenuBarPopoverView: View {
     @ObservedObject private var store: AudioRouterStore
     private let showMainWindow: () -> Void
+    @State private var section: MenuBarSection = .apps
     @State private var selectedSourceID = ""
-    @State private var selectedOutputID = ""
+    @State private var setupName = ""
+    @State private var savedSetupName: String?
 
     public init(store: AudioRouterStore, showMainWindow: @escaping () -> Void) {
         self.store = store
@@ -12,660 +15,509 @@ public struct MenuBarPopoverView: View {
     }
 
     public var body: some View {
-        ZStack {
-            MenuBarPalette.background
-                .ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                header
-                    .padding(.horizontal, 14)
-                    .padding(.top, 14)
-                    .padding(.bottom, 10)
-
-                Divider()
-                    .opacity(0.22)
-
-                VStack(spacing: 10) {
-                    if !store.settings.hasCompletedOnboarding {
-                        setupPrompt
+        VStack(spacing: 0) {
+            header.padding(14)
+            systemControls.padding(.horizontal, 14).padding(.bottom, 12)
+            Picker("Quick controls", selection: $section) {
+                ForEach(MenuBarSection.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14).padding(.bottom, 12)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    notices
+                    switch section {
+                    case .apps: appControls
+                    case .outputs: outputControls
+                    case .setups: setupControls
+                    case .eq: equalizerControls
                     }
-
-                    if let error = store.lastError {
-                        SupportNote(note: error) {
-                            store.dismissUnsupportedNote()
-                        }
-                    }
-
-                    selectedRoutePanel
-                    compactRoutesPanel
                 }
                 .padding(14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-
-                footer
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            footer.padding(.horizontal, 14).padding(.vertical, 10)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .tint(.teal)
         .preferredColorScheme(store.settings.effectiveColorScheme)
-        .onAppear {
-            syncSelectionIfNeeded()
-        }
-        .onChange(of: store.audioSources) { _, _ in
-            syncSelectionIfNeeded()
-        }
-        .onChange(of: store.outputDevices) { _, _ in
-            syncOutputIfNeeded()
-        }
-        .onChange(of: store.outputGroups) { _, _ in
-            syncOutputIfNeeded()
+        .controlSize(.small)
+        .onAppear { synchronizeSource(); selectVolumeTarget() }
+        .onChange(of: store.audioSources.map(\.id)) { _, _ in synchronizeSource() }
+        .onChange(of: store.selectedSourceID) { _, id in
+            if let id, store.audioSources.contains(where: { $0.id == id }) { selectedSourceID = id }
         }
         .onChange(of: selectedSourceID) { _, _ in
-            guard !selectedSourceID.isEmpty else { return }
-            store.selectedSourceID = selectedSourceID
-            syncOutputFromSelectedSource()
+            if section == .apps { selectVolumeTarget() }
         }
+        .onChange(of: section) { _, _ in selectVolumeTarget() }
+        .onChange(of: store.activeUserProfile.id) { _, _ in savedSetupName = nil }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             AudioRouterLogo(size: 32)
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("AudioRouter")
-                        .font(.system(size: 16, weight: .bold))
-                    StatusLabel(
-                        text: store.settings.demoMode ? "Demo" : "Live",
-                        status: store.settings.demoMode ? .demo : .working
-                    )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("AudioRouter").font(.system(size: 16, weight: .bold))
+                Text(store.settings.demoMode ? "Demo Mode" : "\(store.activeLiveRouteCount) live routes")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Menu {
+                ForEach(store.userProfileManager.profiles) { profile in
+                    Button { store.selectUserProfile(profile) } label: {
+                        if profile.id == store.activeUserProfile.id {
+                            Label(profile.displayName, systemImage: "checkmark")
+                        } else { Text(profile.displayName) }
+                    }
                 }
+                Divider()
+                Button("Manage Profiles...") { open(.setups) }
+            } label: {
                 Text(store.activeUserProfile.displayName)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .font(.caption.weight(.semibold)).lineLimit(1)
+                    .frame(maxWidth: 150, alignment: .trailing)
             }
-
-            Spacer(minLength: 8)
-
-            Button {
-                store.refresh()
-                syncSelectionIfNeeded()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .background(MenuBarPalette.buttonBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .help("Refresh route apps and outputs")
-            .accessibilityLabel("Refresh AudioRouter routes")
-
-            Button {
-                store.selectedSettingsSection = .dashboard
-                showMainWindow()
-            } label: {
-                Image(systemName: "square.grid.2x2")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .background(MenuBarPalette.buttonBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .help("Open full routing board")
-            .accessibilityLabel("Open full AudioRouter routing board")
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+            .help("Switch profile")
+            .accessibilityLabel("Profile: \(store.activeUserProfile.displayName)")
+            Menu {
+                Button("Refresh Apps and Devices", systemImage: "arrow.clockwise") { store.refresh() }
+                Button("Add App...", systemImage: "app.badge.plus") { open(.dashboard) }
+                Divider()
+                Button("Shortcuts...", systemImage: "keyboard") { open(.shortcuts) }
+                Button("Settings...", systemImage: "gearshape") { open(.settings) }
+                Button("Reliability and Diagnostics...", systemImage: "wrench.and.screwdriver") { open(.advanced) }
+                Divider()
+                Button("Check for Updates...", systemImage: "arrow.down.circle") { store.checkForUpdates() }
+                    .disabled(store.updateManager.isChecking)
+                Button("Quit AudioRouter", systemImage: "power") { NSApp.terminate(nil) }
+            } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("More AudioRouter controls").accessibilityLabel("More AudioRouter controls")
         }
     }
 
-    private var setupPrompt: some View {
-        MenuBarPanel(tint: .teal) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.teal)
-                    .frame(width: 28, height: 28)
-                    .background(.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Quick setup")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Choose apps and speakers in the full board.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
+    private var systemControls: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("System output").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
-
-                Button {
-                    showMainWindow()
-                    store.showOnboarding()
+                Menu {
+                    ForEach(store.outputDevices) { device in
+                        Button { store.setDefaultDevice(device) } label: {
+                            if device.isDefault { Label(device.name, systemImage: "checkmark") }
+                            else { Text(device.name) }
+                        }
+                    }
                 } label: {
-                    Label("Open", systemImage: "arrow.up.right.square")
+                    Text(store.currentOutput?.name ?? "No output connected")
+                        .font(.caption.weight(.medium)).lineLimit(1)
                 }
-                .controlSize(.small)
+                .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                .disabled(store.outputDevices.isEmpty)
+                .help("Change the system output for apps following macOS")
+            }
+            HStack(spacing: 8) {
+                iconButton(store.currentOutput?.isMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                           label: store.currentOutput?.isMuted == true ? "Unmute system output" : "Mute system output",
+                           enabled: store.currentOutput?.canSetMute == true) { store.toggleSystemMute() }
+                volumeControl(store.currentOutput?.volume, enabled: store.currentOutput?.canSetVolume == true,
+                              label: "System output volume", action: store.setSystemOutputVolume)
+            }
+        }
+        .padding(10).background(inset, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder private var notices: some View {
+        if !store.settings.hasCompletedOnboarding {
+            Button {
+                open(.dashboard)
+                store.showOnboarding()
+            } label: { Label("Finish setup", systemImage: "checklist") }
+                .buttonStyle(.bordered).foregroundStyle(.primary)
+        }
+        if let error = store.lastError {
+            SupportNote(note: error) { store.dismissUnsupportedNote() }
+        }
+        if let update = store.updateManager.availableUpdate {
+            HStack {
+                Label("Version \(update.version) available", systemImage: "arrow.down.circle")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("View") { open(.settings) }.buttonStyle(.bordered).foregroundStyle(.primary)
             }
         }
     }
 
-    private var selectedRoutePanel: some View {
-        MenuBarPanel(tint: .orange) {
-            if store.audioSources.isEmpty {
-                emptyRouteState
-            } else if let source = selectedSource {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .center, spacing: 10) {
-                        AppSourceIcon(source: source)
-                            .frame(width: 34, height: 34)
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                Picker("Source App", selection: $selectedSourceID) {
-                                    ForEach(store.audioSources) { source in
-                                        Text(source.appName).tag(source.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .controlSize(.small)
-                                .frame(maxWidth: 190, alignment: .leading)
-
-                                if let quality = store.sourceAudioQuality(for: source) {
-                                    SourceQualityPill(
-                                        label: quality.compactDisplayLabel,
-                                        isLive: !store.settings.demoMode
-                                    )
-                                    .help(store.sourceAudioQualityHelp(for: source, quality: quality))
-                                }
-                            }
-
-                            Text(routeSummary(for: source))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        Spacer(minLength: 4)
-
-                        MenuRouteStatusPill(source: source, store: store)
-                    }
-
-                    routeTargetStrip(for: source)
-
-                    selectedRouteControls(for: source)
-
-                    if let note = selectedRouteNote {
-                        Text(note)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+    private var appControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let source = selectedSource {
+                selectedAppControls(source)
+                sectionHeading("Apps", detail: "\(store.audioSources.count) configured", destination: .dashboard)
+                LazyVStack(spacing: 1) {
+                    ForEach(store.audioSources) { source in appRow(source) }
                 }
+            } else {
+                emptyState("No apps configured", symbol: "app.dashed")
+                Button("Add App...") { open(.dashboard) }.buttonStyle(.bordered).foregroundStyle(.primary)
             }
         }
     }
 
-    private var compactRoutesPanel: some View {
-        MenuBarPanel(tint: .teal) {
-            VStack(alignment: .leading, spacing: 9) {
+    private func appRow(_ source: AudioSource) -> some View {
+        Button {
+            selectedSourceID = source.id
+            store.selectedSourceID = source.id
+        } label: {
+            HStack(spacing: 10) {
+                AppSourceIcon(source: source).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(source.appName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(store.routeOutputName(for: source)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                SourceMeterView(meterState: store.meterState, sourceID: source.id, barCount: 5, height: 13, color: .teal)
+                    .frame(width: 52)
+                Text(source.volume.roundedPercentDescription).font(.caption.monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+                Image(systemName: selectedSourceID == source.id ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selectedSourceID == source.id ? Color.teal : Color.secondary.opacity(0.5))
+            }
+            .padding(10)
+            .background(selectedSourceID == source.id ? Color.teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Select \(source.appName), output \(store.routeOutputName(for: source))")
+        .accessibilityAddTraits(selectedSourceID == source.id ? .isSelected : [])
+    }
+
+    private func selectedAppControls(_ source: AudioSource) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                AppSourceIcon(source: source).frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(source.appName).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    if let quality = store.sourceAudioQuality(for: source) {
+                        Text(quality.compactDisplayLabel).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                StatusLabel(text: store.routeStatus(for: source), status: store.statusStyle(for: source))
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
+                Picker("Output for \(source.appName)", selection: Binding(
+                    get: { store.route(for: source).outputDeviceID ?? "" },
+                    set: { store.prepareAndAssignSourceOutput(source: source, uid: $0.isEmpty ? nil : $0) }
+                )) {
+                    Text("Follow System Output").tag("")
+                    ForEach(store.outputDevices) { Text($0.name).tag($0.uid) }
+                    ForEach(store.outputGroups) { Text($0.name).tag($0.routeTargetID) }
+                    ForEach(store.airPlayRouteCandidates) { Text("\($0.name) (AirPlay)").tag($0.routeTargetID) }
+                    if let missingID = store.route(for: source).outputDeviceID,
+                       !availableTargetIDs.contains(missingID) {
+                        Text("\(store.routeOutputName(for: source)) (unavailable)").tag(missingID)
+                    }
+                }
+                .labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity)
+                SystemAirPlayPickerButton(compact: true)
+            }
+            HStack(spacing: 8) {
+                iconButton(source.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                           label: source.isMuted ? "Unmute \(source.appName)" : "Mute \(source.appName)",
+                           enabled: store.supportsPerAppMute) {
+                    store.setSourceMuted(source: source, isMuted: !source.isMuted)
+                }
+                volumeControl(source.volume, enabled: store.supportsPerAppVolume, label: "\(source.appName) gain",
+                              range: 0...1.5, accent: .orange) {
+                    store.selectedSourceID = source.id
+                    store.setSourceVolume(source: source, volume: $0)
+                }
+                Menu {
+                    Button("Test Route", systemImage: "waveform") { store.testRoute(for: source) }
+                    Button("Retry Route", systemImage: "arrow.clockwise") { store.retrySourceRoute(source) }
+                        .disabled(store.route(for: source).routeMode != .customOutput)
+                    Button("Follow System Output", systemImage: "arrow.uturn.backward") { store.resetSourceToSystemOutput(source) }
+                    Divider()
+                    Button("Route Details...", systemImage: "info.circle") { open(.advanced) }
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 28, height: 28) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("Actions for \(source.appName)")
+            }
+            if let diagnostic = store.routeDiagnostic(for: source), store.routeStatusIsWarning(for: source) {
+                Text(diagnostic).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12).background(inset, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var outputControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeading("Output devices", detail: "\(store.outputDevices.count) connected", destination: .devices)
+            if store.outputDevices.isEmpty { emptyState("No outputs connected", symbol: "speaker.slash") }
+            ForEach(store.outputDevices) { outputRow($0) }
+            if !store.airPlayRouteCandidates.isEmpty {
                 HStack {
-                    Label("Routes", systemImage: "arrow.triangle.branch")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
+                    Text("AirPlay").font(.subheadline.weight(.semibold))
                     Spacer()
-                    Text("\(store.audioSources.count)")
-                        .font(.caption2.monospacedDigit().weight(.bold))
-                        .foregroundStyle(.secondary)
+                    SystemAirPlayPickerButton(compact: true)
                 }
-
-                if store.audioSources.isEmpty {
-                    Text("No route apps available.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 6) {
-                            ForEach(store.audioSources) { source in
-                                MenuCompactRouteRow(
-                                    source: source,
-                                    isSelected: source.id == selectedSourceID,
-                                    store: store
-                                ) {
-                                    selectedSourceID = source.id
-                                    store.selectedSourceID = source.id
-                                    syncOutputFromSelectedSource()
-                                }
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                    .frame(maxHeight: 176)
+                ForEach(store.airPlayRouteCandidates) { candidate in
+                    HStack {
+                        Label(candidate.name, systemImage: "airplayaudio").lineLimit(1)
+                        Spacer()
+                        Text("Use AirPlay picker").font(.caption).foregroundStyle(.secondary)
+                    }.font(.subheadline)
                 }
             }
+            Divider()
+            HStack {
+                Text("Group Play").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button { store.createOutputGroup() } label: { Label("New Group", systemImage: "plus") }
+                    .buttonStyle(.bordered).foregroundStyle(.primary).disabled(store.outputDevices.isEmpty)
+            }
+            ForEach(store.outputGroups) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label(group.name, systemImage: "speaker.3.fill").font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Spacer()
+                        Text("\(store.outputDevices(for: group).count) speakers").font(.caption).foregroundStyle(.secondary)
+                        iconButton("slider.horizontal.3", label: "Edit \(group.name)") { open(.devices) }
+                    }
+                    ForEach(store.outputDevices(for: group)) { device in
+                        HStack {
+                            Text(device.name).font(.caption).lineLimit(1).frame(width: 135, alignment: .leading)
+                            Slider(value: Binding(
+                                get: { group.perDeviceVolumes[device.uid] ?? device.volume ?? 1 },
+                                set: {
+                                    store.selectOutputDevice(device)
+                                    store.setOutputGroupVolume(group, deviceUID: device.uid, volume: $0)
+                                }
+                            ), in: 0...1, step: 0.01)
+                            .disabled(!device.canSetVolume)
+                            .accessibilityLabel("\(group.name), \(device.name) volume")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Picker("Input device", selection: Binding(
+                get: { store.currentInput?.uid ?? "" },
+                set: { uid in
+                    if let device = store.inputDevices.first(where: { $0.uid == uid }) { store.setDefaultDevice(device) }
+                }
+            )) {
+                if store.currentInput == nil { Text("No input connected").tag("") }
+                ForEach(store.inputDevices) { Text($0.name).tag($0.uid) }
+            }
+            .pickerStyle(.menu).disabled(store.inputDevices.isEmpty)
+            if let input = store.currentInput, input.canSetVolume {
+                Slider(value: Binding(get: { input.volume ?? 0 }, set: { store.setInputVolume($0) }), in: 0...1, step: 0.01)
+                    .accessibilityLabel("\(input.name) input volume")
+            }
+        }
+    }
+
+    private func outputRow(_ device: AudioDevice) -> some View {
+        let isSelected = store.selectedOutputDeviceID == device.uid
+        return VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button { store.selectOutputDevice(device) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "speaker.wave.2")
+                            .foregroundStyle(isSelected ? Color.teal : Color.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text(device.isDefault ? "System output" : device.transport.rawValue)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("Select \(device.name) volume")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                DeviceMeterView(meterState: store.meterState, deviceID: device.uid, barCount: 5, height: 13, color: .teal)
+                    .frame(width: 52)
+                Menu {
+                    Button("Set as System Output", systemImage: "speaker.wave.2") { store.setDefaultDevice(device) }
+                        .disabled(device.isDefault)
+                    Button("Test Speaker", systemImage: "waveform") { store.testOutput(device) }
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 28, height: 28) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("Actions for \(device.name)")
+            }
+            HStack(spacing: 8) {
+                iconButton(device.isMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                           label: device.isMuted == true ? "Unmute \(device.name)" : "Mute \(device.name)",
+                           enabled: device.canSetMute) {
+                    store.selectOutputDevice(device)
+                    store.setDeviceMuted(device, isMuted: !(device.isMuted ?? false))
+                }
+                volumeControl(device.volume, enabled: device.canSetVolume, label: "\(device.name) output volume") {
+                    store.selectOutputDevice(device)
+                    store.setDeviceVolume(device, volume: $0)
+                }
+            }
+        }
+        .padding(10)
+        .background(isSelected ? Color.teal.opacity(0.10) : inset, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var setupControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeading("Saved setups", detail: store.activeUserProfile.displayName, destination: .setups)
+            HStack(spacing: 8) {
+                TextField("Setup name", text: $setupName).textFieldStyle(.roundedBorder).onSubmit { saveSetup() }
+                Button { saveSetup() } label: { Label("Save Current", systemImage: "square.and.arrow.down") }
+                    .buttonStyle(.bordered).foregroundStyle(.primary).disabled(setupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let savedSetupName {
+                Label("Saved \(savedSetupName)", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.teal)
+            }
+            if store.presetManager.presets.isEmpty { emptyState("No saved setups for this profile", symbol: "square.stack.3d.up") }
+            ForEach(store.presetManager.presets) { preset in
+                HStack(spacing: 10) {
+                    Image(systemName: "square.stack.3d.up").foregroundStyle(.teal)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(preset.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text("\(preset.appOutputAssignments.count) app routes \u{00B7} \(preset.eqPreset.rawValue) EQ")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Button("Apply") { store.applyPreset(preset) }.buttonStyle(.bordered).foregroundStyle(.primary)
+                }.padding(.vertical, 5)
+            }
+        }
+    }
+
+    private var equalizerControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeading("Equalizer", detail: store.eqManager.state.selectedPreset.rawValue, destination: .eq)
+            Picker("EQ preset", selection: Binding(
+                get: { store.eqManager.state.selectedPreset }, set: { store.eqManager.applyPreset($0) }
+            )) {
+                ForEach(EQPreset.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.menu)
+            VStack(spacing: 12) {
+                EQCurveView(bands: store.eqManager.state.bands).frame(height: 64)
+                HStack(spacing: 0) {
+                    ForEach(EQPreset.bandLabels.indices, id: \.self) { index in
+                        EQBandStrip(label: EQPreset.bandLabels[index], value: store.eqManager.state.bands[index],
+                                    isEnabled: true, height: 88,
+                                    onChange: { store.eqManager.setBand(index: index, gain: $0) })
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .padding(8)
+            .background(ConsolePalette.inset, in: RoundedRectangle(cornerRadius: 8))
+            .environment(\.colorScheme, .dark)
+            HStack {
+                Button { store.eqManager.reset() } label: { Label("Reset Flat", systemImage: "arrow.counterclockwise") }
+                    .buttonStyle(.bordered).foregroundStyle(.primary)
+                Spacer()
+                Button { store.eqManager.saveCustomPreset() } label: { Label("Save Custom", systemImage: "square.and.arrow.down") }
+                    .buttonStyle(.bordered).foregroundStyle(.primary)
+            }
+            Text("EQ applies to audio routed through AudioRouter.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack {
             VStack(alignment: .leading, spacing: 1) {
-                Text("AUDIOROUTER")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .tracking(0)
-                Text("by Alan")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(.white.opacity(0.5))
-            .accessibilityHidden(true)
-
+                Text("AUDIOROUTER").font(.system(size: 10, weight: .heavy, design: .rounded))
+                Text("by Alan").font(.system(size: 9, weight: .semibold))
+            }.foregroundStyle(.primary.opacity(0.5)).accessibilityHidden(true)
             Spacer()
-
-            Button {
-                store.selectedSettingsSection = .dashboard
-                showMainWindow()
-            } label: {
-                Label("Add Apps", systemImage: "app.badge.plus")
-            }
-            .buttonStyle(.audioRouter)
-            .controlSize(.small)
-
-            Button {
-                store.selectedSettingsSection = .settings
-                showMainWindow()
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.audioRouterQuiet)
-            .controlSize(.small)
-            .help("Open AudioRouter settings")
-            .accessibilityLabel("Open AudioRouter settings")
+            Button { open(section.destination) } label: {
+                Label("Open \(section.destination.rawValue)", systemImage: "arrow.up.right.square")
+            }.buttonStyle(.bordered).foregroundStyle(.primary)
         }
     }
 
-    private var emptyRouteState: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("No route apps available", systemImage: "app.badge")
-                .font(.subheadline.weight(.semibold))
-            Text("Open Spotify, Apple Music, Chrome, or add apps from the full routing board.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MenuBarPalette.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func routeTargetStrip(for source: AudioSource) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Text("Output")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                SystemAirPlayPickerButton(compact: true)
-                Button {
-                    chooseOutput("")
-                } label: {
-                    Label("Follow System", systemImage: "arrow.triangle.branch")
-                }
-                .buttonStyle(.plain)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(selectedOutputID.isEmpty ? .teal : .secondary)
-            }
-
-            ScrollView(.horizontal) {
-                HStack(spacing: 7) {
-                    ForEach(routeTargets) { target in
-                        MenuTargetChip(
-                            target: target,
-                            isSelected: selectedOutputID == target.id,
-                            action: { chooseOutput(target.id) }
-                        )
-                    }
-                }
-                .padding(.vertical, 1)
-            }
-            .scrollIndicators(.hidden)
-            .accessibilityLabel("\(source.appName) output choices")
-        }
-    }
-
-    private func selectedRouteControls(for source: AudioSource) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                store.setSourceMuted(source: source, isMuted: !source.isMuted)
-            } label: {
-                Image(systemName: source.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(source.isMuted ? .red : .green)
-            .background(MenuBarPalette.buttonBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .disabled(!store.supportsPerAppMute)
-            .help(store.supportsPerAppMute ? "Mute \(source.appName)" : "Per-app mute requires an audio backend")
-            .accessibilityLabel(source.isMuted ? "Unmute \(source.appName)" : "Mute \(source.appName)")
-
-            InlineVolumeSlider(
-                value: source.volume,
-                isEnabled: store.supportsPerAppVolume,
-                systemImage: "slider.horizontal.3",
-                range: 0...1.5,
-                step: 0.01,
-                accent: .orange,
-                showsStepButtons: true,
-                nudgeStep: 0.01,
-                accessibilityLabel: "\(source.appName) gain",
-                accessibilityHint: store.supportsPerAppVolume ? "Adjust route volume" : "Per-app gain requires an audio backend",
-                onChange: { store.setSourceVolume(source: source, volume: $0) }
-            )
-            .frame(minWidth: 190, maxWidth: .infinity)
-
-            Button {
-                store.retrySourceRoute(source)
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .background(MenuBarPalette.buttonBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .disabled(!canRetry(source))
-            .help("Retry \(source.appName) route")
-            .accessibilityLabel("Retry \(source.appName) route")
-
-            Button {
-                store.testRoute(for: source)
-            } label: {
-                Image(systemName: "speaker.wave.2.fill")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.orange)
-            .background(MenuBarPalette.buttonBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .help("Test \(source.appName) route")
-            .accessibilityLabel("Test \(source.appName) route")
-        }
-    }
-
+    private var inset: Color { Color.primary.opacity(0.045) }
     private var selectedSource: AudioSource? {
         store.audioSources.first { $0.id == selectedSourceID } ?? store.audioSources.first
     }
-
-    private var routeTargets: [MenuRouteTarget] {
-        var targets: [MenuRouteTarget] = [
-            MenuRouteTarget(
-                id: "",
-                title: "Follow System",
-                subtitle: store.currentOutput?.name ?? "System output",
-                systemImage: "arrow.triangle.branch",
-                tint: .teal
-            )
-        ]
-
-        targets += store.outputDevices.map { device in
-            MenuRouteTarget(
-                id: device.uid,
-                title: device.name,
-                subtitle: device.isDefault ? "System output" : device.transport.rawValue,
-                systemImage: device.transport == .builtIn ? "speaker.wave.2.fill" : "headphones",
-                tint: device.isDefault ? .teal : .blue
-            )
-        }
-
-        targets += store.airPlayRouteCandidates.map { candidate in
-            MenuRouteTarget(
-                id: candidate.routeTargetID,
-                title: candidate.name,
-                subtitle: "AirPlay · use picker",
-                systemImage: "airplayaudio",
-                tint: .orange
-            )
-        }
-
-        targets += store.outputGroups.map { group in
-            MenuRouteTarget(
-                id: group.routeTargetID,
-                title: group.name,
-                subtitle: "\(store.outputDevices(for: group).count) speakers",
-                systemImage: "speaker.3.fill",
-                tint: .orange
-            )
-        }
-
-        return targets
+    private var availableTargetIDs: Set<String> {
+        Set(store.outputDevices.map(\.uid) + store.outputGroups.map(\.routeTargetID) + store.airPlayRouteCandidates.map(\.routeTargetID))
     }
 
-    private var selectedRouteNote: String? {
-        guard let source = selectedSource else { return nil }
-        if let diagnostic = store.routeDiagnostic(for: source), !diagnostic.isEmpty {
-            return diagnostic
-        }
-        if selectedOutputID.isEmpty {
-            return "\(source.appName) follows the current system output."
-        }
-        return "\(source.appName) is assigned to \(destinationName(for: selectedOutputID))."
-    }
-
-    private func routeSummary(for source: AudioSource) -> String {
-        "\(source.appName) -> \(store.routeOutputName(for: source))"
-    }
-
-    private func chooseOutput(_ outputID: String) {
-        selectedOutputID = outputID
-        applySelectedRoute()
-    }
-
-    private func applySelectedRoute() {
-        guard let source = selectedSource else { return }
-        store.prepareAndAssignSourceOutput(source: source, uid: selectedOutputID.isEmpty ? nil : selectedOutputID)
-    }
-
-    private func canRetry(_ source: AudioSource) -> Bool {
-        let route = store.route(for: source)
-        return route.routeMode == .customOutput && route.status != .active
-    }
-
-    private func destinationName(for id: String) -> String {
-        guard !id.isEmpty else { return "Follow System" }
-        if let device = store.outputDevices.first(where: { $0.uid == id }) {
-            return device.name
-        }
-        if let group = store.outputGroups.first(where: { $0.routeTargetID == id }) {
-            return group.name
-        }
-        if let candidate = store.airPlayRouteCandidate(forRouteTargetID: id) {
-            return candidate.name
-        }
-        if store.isAirPlayRouteCandidateTarget(id) {
-            return "AirPlay Route"
-        }
-        return "Missing Output"
-    }
-
-    private func syncSelectionIfNeeded() {
-        if selectedSourceID.isEmpty || !store.audioSources.contains(where: { $0.id == selectedSourceID }) {
-            selectedSourceID = store.selectedSourceID ?? store.audioSources.first?.id ?? ""
-        }
-        if !selectedSourceID.isEmpty {
-            store.selectedSourceID = selectedSourceID
-        }
-        syncOutputIfNeeded()
-    }
-
-    private func syncOutputIfNeeded() {
-        if selectedOutputID.isEmpty {
-            syncOutputFromSelectedSource()
-            return
-        }
-        let outputExists = store.outputDevices.contains { $0.uid == selectedOutputID }
-            || store.outputGroups.contains { $0.routeTargetID == selectedOutputID }
-            || store.isAirPlayRouteCandidateTarget(selectedOutputID)
-        if !outputExists {
-            syncOutputFromSelectedSource()
+    private func synchronizeSource() {
+        if !store.audioSources.contains(where: { $0.id == selectedSourceID }) {
+            selectedSourceID = store.audioSources.first { $0.id == store.selectedSourceID }?.id ?? store.audioSources.first?.id ?? ""
         }
     }
 
-    private func syncOutputFromSelectedSource() {
-        guard let source = selectedSource else {
-            selectedOutputID = ""
-            return
+    private func selectVolumeTarget() {
+        if section == .apps, let source = selectedSource { store.selectedSourceID = source.id }
+        else if section == .outputs,
+                !store.outputDevices.contains(where: { $0.uid == store.selectedOutputDeviceID }),
+                let output = store.currentOutput ?? store.outputDevices.first { store.selectOutputDevice(output) }
+    }
+
+    private func saveSetup() {
+        let name = setupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        store.saveCurrentSetup(named: name)
+        savedSetupName = name
+        setupName = ""
+    }
+
+    private func open(_ destination: SettingsSection) {
+        store.selectedSettingsSection = destination
+        showMainWindow()
+    }
+
+    private func sectionHeading(_ title: String, detail: String, destination: SettingsSection) -> some View {
+        HStack {
+            Text(title).font(.subheadline.weight(.semibold))
+            Spacer()
+            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            iconButton("arrow.up.right.square", label: "Open \(title)") { open(destination) }
         }
-        let route = store.route(for: source)
-        selectedOutputID = route.routeMode == .customOutput ? (route.outputDeviceID ?? "") : ""
+    }
+
+    private func volumeControl(_ value: Double?, enabled: Bool, label: String,
+                               range: ClosedRange<Double> = 0...1, accent: Color = .teal,
+                               action: @escaping (Double) -> Void) -> some View {
+        InlineVolumeSlider(value: value, isEnabled: enabled, systemImage: "slider.horizontal.3",
+                           range: range, step: 0.01, accent: accent, showsStepButtons: true, nudgeStep: 0.01,
+                           accessibilityLabel: label, accessibilityHint: "Adjust volume", onChange: action)
+    }
+
+    private func iconButton(_ symbol: String, label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).frame(width: 28, height: 28) }
+            .buttonStyle(.plain).background(inset, in: RoundedRectangle(cornerRadius: 6))
+            .disabled(!enabled).help(label).accessibilityLabel(label)
+    }
+
+    private func emptyState(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol).font(.subheadline).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
     }
 }
 
-private struct MenuBarPanel<Content: View>: View {
-    let tint: Color
-    let content: Content
-
-    init(tint: Color, @ViewBuilder content: () -> Content) {
-        self.tint = tint
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(MenuBarPalette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(tint.opacity(0.86))
-                .frame(width: 3)
-                .padding(.vertical, 10)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(MenuBarPalette.stroke, lineWidth: 1)
+private enum MenuBarSection: String, CaseIterable, Identifiable {
+    case apps = "Apps", outputs = "Outputs", setups = "Setups", eq = "EQ"
+    var id: String { rawValue }
+    var destination: SettingsSection {
+        switch self {
+        case .apps: return .dashboard
+        case .outputs: return .devices
+        case .setups: return .setups
+        case .eq: return .eq
         }
     }
-}
-
-private struct MenuTargetChip: View {
-    let target: MenuRouteTarget
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: target.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(target.tint)
-                    .frame(width: 24, height: 24)
-                    .background(target.tint.opacity(isSelected ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(target.title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    Text(target.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(isSelected ? target.tint : .secondary.opacity(0.7))
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
-            .frame(width: 174, alignment: .leading)
-            .background(
-                isSelected ? target.tint.opacity(0.14) : MenuBarPalette.inset,
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(isSelected ? target.tint.opacity(0.62) : MenuBarPalette.stroke, lineWidth: isSelected ? 1.2 : 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(target.title), \(target.subtitle)")
-    }
-}
-
-private struct MenuCompactRouteRow: View {
-    let source: AudioSource
-    let isSelected: Bool
-    @ObservedObject var store: AudioRouterStore
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                AppSourceIcon(source: source)
-                    .frame(width: 26, height: 26)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Text(source.appName)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                        Circle()
-                            .fill(source.isProducingAudio ? Color.green : Color.orange.opacity(0.85))
-                            .frame(width: 6, height: 6)
-                            .accessibilityHidden(true)
-                    }
-                    Text(store.routeOutputName(for: source))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 6)
-
-                Text(source.volume.roundedPercentDescription)
-                    .font(.caption2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 42, alignment: .trailing)
-
-                MenuRouteStatusPill(source: source, store: store)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
-            .background(
-                isSelected ? Color.teal.opacity(0.12) : MenuBarPalette.inset,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? Color.teal.opacity(0.62) : MenuBarPalette.stroke, lineWidth: isSelected ? 1.2 : 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(source.appName), output \(store.routeOutputName(for: source)), \(store.routeStatus(for: source))")
-    }
-}
-
-private struct MenuRouteStatusPill: View {
-    let source: AudioSource
-    @ObservedObject var store: AudioRouterStore
-
-    var body: some View {
-        StatusLabel(text: store.routeStatus(for: source), status: store.statusStyle(for: source))
-    }
-}
-
-private struct MenuRouteTarget: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let subtitle: String
-    let systemImage: String
-    let tint: Color
-}
-
-private enum MenuBarPalette {
-    static let background = LinearGradient(
-        colors: [
-            Color(red: 0.045, green: 0.047, blue: 0.052),
-            Color(red: 0.028, green: 0.030, blue: 0.035)
-        ],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-    static let panel = Color(red: 0.070, green: 0.073, blue: 0.080).opacity(0.96)
-    static let inset = Color.white.opacity(0.045)
-    static let buttonBackground = Color.white.opacity(0.075)
-    static let stroke = Color.white.opacity(0.095)
 }

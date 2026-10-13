@@ -208,7 +208,7 @@ private struct EQPresetButton: View {
     }
 }
 
-private struct EQBandStrip: View {
+struct EQBandStrip: View {
     let label: String
     let value: Double
     let isEnabled: Bool
@@ -333,7 +333,7 @@ private struct EQVerticalSlider: View {
     }
 }
 
-private struct EQCurveView: View {
+struct EQCurveView: View {
     let bands: [Double]
 
     var body: some View {

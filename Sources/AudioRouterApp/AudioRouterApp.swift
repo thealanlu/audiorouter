@@ -26,11 +26,8 @@ struct AudioRouterApplication: App {
 
         MenuBarExtra {
             MenuBarPopoverView(store: store, showMainWindow: mainWindowCoordinator.showMainWindow)
-                .frame(width: 420, height: 560)
+                .frame(width: 470, height: min(620, max(380, (NSScreen.main?.visibleFrame.height ?? 676) - 56)))
                 .modifier(MainWindowActionRegistration(coordinator: mainWindowCoordinator))
-                .onAppear {
-                    store.start()
-                }
         } label: {
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .symbolRenderingMode(.hierarchical)

@@ -52,6 +52,7 @@ func runChecks() throws {
     checkShortcutPersistence()
     try checkSelectedSourceVolumeCommandStep()
     try checkSelectedOutputVolumeCommandStep()
+    try checkNamedSetupRestoresDevicesAndVolume()
     checkDeviceModelIDs()
     checkAirPlayRouteCandidateModel()
     checkAirPlayRouteDeviceMatching()
@@ -378,6 +379,54 @@ func checkSelectedOutputVolumeCommandStep() throws {
     precondition(abs((store.outputDevices.first { $0.uid == output.uid }?.volume ?? 0) - 0.26) < 0.0001, "Command = should increase selected output volume by one percent")
     store.changeSelectedVolume(by: -0.01)
     precondition(abs((store.outputDevices.first { $0.uid == output.uid }?.volume ?? 0) - 0.25) < 0.0001, "Command - should decrease selected output volume by one percent")
+}
+
+@MainActor
+func checkNamedSetupRestoresDevicesAndVolume() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let suite = "AudioRouterChecks-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettingsStore(defaults: defaults)
+    settings.demoMode = true
+    let presetURL = directory.appendingPathComponent("presets.json")
+    let store = AudioRouterStore(
+        settings: settings,
+        eqManager: EQManager(defaults: defaults),
+        presetManager: PresetManager(fileURL: presetURL),
+        userProfileManager: UserProfileManager(fileURL: directory.appendingPathComponent("profiles.json")),
+        audioRoutingManager: AudioRoutingManager(backend: FakeRoutingBackend(), fileURL: directory.appendingPathComponent("routes.json")),
+        outputGroupsURL: directory.appendingPathComponent("groups.json"),
+        appSourcesURL: directory.appendingPathComponent("sources.json"),
+        hiddenDefaultSourcesURL: directory.appendingPathComponent("hidden.json"),
+        sourceOrderURL: directory.appendingPathComponent("order.json")
+    )
+    store.refresh(silent: true)
+    let input = store.currentInput!
+    let originalOutput = store.currentOutput!
+    let speaker = store.outputDevices.first { !$0.isDefault }!
+    store.setDefaultDevice(speaker)
+    precondition(store.currentInput?.uid == input.uid, "Changing output must preserve the input selection")
+    store.setDefaultDevice(input)
+    precondition(store.currentOutput?.uid == speaker.uid, "Changing input must preserve the output selection")
+    store.setSystemOutputVolume(0.37)
+    store.setInputVolume(0.46)
+    store.saveCurrentSetup(named: "  Studio Mix  ")
+    let reloaded = PresetManager(fileURL: presetURL)
+    let preset = reloaded.presets.first!
+    precondition(preset.name == "Studio Mix", "Named setups must persist a trimmed name")
+    precondition(preset.outputDeviceUID == speaker.uid && preset.inputDeviceUID == input.uid, "Setups must retain both device selections")
+    store.setDefaultDevice(originalOutput)
+    store.setSystemOutputVolume(0.20)
+    store.setInputVolume(0.10)
+    store.applyPreset(preset)
+    precondition(store.currentOutput?.uid == speaker.uid && store.currentInput?.uid == input.uid, "Applying a setup must restore both device selections")
+    precondition(abs((store.currentOutput?.volume ?? 0) - 0.37) < 0.0001, "Applying a setup must restore its output volume after selecting input")
+    precondition(abs((store.currentInput?.volume ?? 0) - 0.46) < 0.0001, "Applying a setup must restore input volume")
+    store.saveCurrentSetup()
+    precondition(store.presetManager.presets.first?.name == "Setup 2", "Existing unnamed setup saving must remain compatible")
 }
 
 func checkDeviceModelIDs() {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Rebuilt the menu-bar widget with Apps, Outputs, Setups, and EQ views, persistent system volume, live meters, profile switching, and direct access to shortcuts, settings, diagnostics, and updates.
+- Added named setup saving, speaker volume and mute, Group Play controls, input selection, and the full 10-band equalizer to quick controls.
+- Kept the selected app or speaker connected to the existing one-percent volume shortcuts and removed repeated audio-service startup when opening the widget.
+- Fixed cached input/output selections so applying a setup restores both devices and their volume levels.
+
 - Restore the main SwiftUI scene when reopening AudioRouter from the Dock after closing its window, including after an extended time in the background.
 - Use the same window restoration path for Dock, Finder, menu-bar controls, and `Show AudioRouter`, without restarting audio routing.
 
