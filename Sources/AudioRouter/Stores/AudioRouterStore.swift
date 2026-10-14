@@ -51,6 +51,7 @@ public final class AudioRouterStore: ObservableObject {
     private let outputTestToneService: OutputTestToneService
     private let airPlayRouteDiscoveryService: AirPlayRouteDiscoveryService
     private var refreshTimer: Timer?
+    private var isStarted = false
     private var meterTimer: Timer?
     private var deviceObservation: DevicePropertyObservation?
     private var pendingVolumeTasks: [String: Task<Void, Never>] = [:]
@@ -360,6 +361,8 @@ public final class AudioRouterStore: ObservableObject {
     }
 
     public func start() {
+        guard !isStarted else { return }
+        isStarted = true
         refresh()
         if !settings.demoMode {
             airPlayRouteDiscoveryService.start()
@@ -368,7 +371,6 @@ public final class AudioRouterStore: ObservableObject {
         updateManager.startAutomaticChecks(enabled: settings.automaticallyCheckForUpdates)
         startImmediatePlaybackObserversIfNeeded()
         startMediaKeepAliveWatchdogIfNeeded()
-        guard refreshTimer == nil else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refresh(silent: true)
@@ -379,6 +381,7 @@ public final class AudioRouterStore: ObservableObject {
     }
 
     public func stop() {
+        isStarted = false
         airPlayRouteDiscoveryService.stop()
         refreshTimer?.invalidate()
         refreshTimer = nil

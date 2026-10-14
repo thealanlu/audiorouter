@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Refreshed the menu-bar widget with icon tabs, quieter buttons, native volume sliders, a persistent bottom system-volume control, and direct Settings and Reliability actions.
+- Replaced segmented widget meters with longer, thin horizontal live-level lines and corrected output-meter device identifiers.
+- Added a short opening fade that respects Reduce Motion, kept clickable controls stationary, and made service startup idempotent across window reopening.
+- Improved widget contrast and the compact AirPlay control in light mode while keeping one-percent volume buttons and shortcuts.
+
 - Rebuilt the menu-bar widget with Apps, Outputs, Setups, and EQ views, persistent system volume, live meters, profile switching, and direct access to shortcuts, settings, diagnostics, and updates.
 - Added named setup saving, speaker volume and mute, Group Play controls, input selection, and the full 10-band equalizer to quick controls.
 - Kept the selected app or speaker connected to the existing one-percent volume shortcuts and removed repeated audio-service startup when opening the widget.

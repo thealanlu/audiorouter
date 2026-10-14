@@ -47,6 +47,7 @@ func runChecks() throws {
     checkThemePreferenceMapping()
     checkSettingsNavigation()
     try checkMeterStateIsolation()
+    try checkServiceStartupIsIdempotent()
     try checkPresetPersistence()
     try checkUserProfilePresetScoping()
     checkShortcutPersistence()
@@ -72,6 +73,44 @@ func runChecks() throws {
     checkPlaybackKeepAliveCandidates()
     checkAppInputPublishingMetadata()
     try checkRouteHealthDiagnostics()
+}
+
+@MainActor
+func checkServiceStartupIsIdempotent() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let suite = "AudioRouterChecks-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettingsStore(defaults: defaults)
+    settings.automaticallyCheckForUpdates = false
+    settings.publishAppInputsAsSystemDevices = false
+    settings.keepMediaPlayingDuringDeviceChanges = false
+    let devices = FakeDeviceManager(devices: [])
+    let store = AudioRouterStore(
+        deviceManager: devices,
+        settings: settings,
+        eqManager: EQManager(defaults: defaults),
+        presetManager: PresetManager(fileURL: directory.appendingPathComponent("presets.json")),
+        userProfileManager: UserProfileManager(fileURL: directory.appendingPathComponent("profiles.json")),
+        shortcutManager: ShortcutManager(defaults: defaults),
+        updateManager: UpdateManager(defaults: defaults),
+        audioRoutingManager: AudioRoutingManager(backend: FakeRoutingBackend(), fileURL: directory.appendingPathComponent("routes.json")),
+        outputGroupsURL: directory.appendingPathComponent("groups.json"),
+        appSourcesURL: directory.appendingPathComponent("sources.json"),
+        hiddenDefaultSourcesURL: directory.appendingPathComponent("hidden.json"),
+        sourceOrderURL: directory.appendingPathComponent("order.json")
+    )
+    defer { store.stop() }
+    store.start()
+    let firstStartRefreshes = devices.refreshCount
+    precondition(firstStartRefreshes > 0, "Initial startup must discover devices")
+    store.start()
+    precondition(devices.refreshCount == firstStartRefreshes, "Reopening must not restart services or repeat device discovery")
+    store.stop()
+    store.start()
+    precondition(devices.refreshCount > firstStartRefreshes, "A stopped store must be able to start again")
 }
 
 @MainActor
@@ -1147,6 +1186,7 @@ private final class FakeChromeHelperOnlyBackend: AudioRoutingBackend {
 
 private final class FakeDeviceManager: AudioDeviceManaging {
     var devices: [AudioDevice]
+    private(set) var refreshCount = 0
     private(set) var defaultOutputSetRequests: [String] = []
 
     init(devices: [AudioDevice]) {
@@ -1154,7 +1194,8 @@ private final class FakeDeviceManager: AudioDeviceManaging {
     }
 
     func refreshDevices() throws -> [AudioDevice] {
-        devices
+        refreshCount += 1
+        return devices
     }
 
     func listOutputDevices() throws -> [AudioOutputDevice] {

@@ -8,6 +8,9 @@ public struct MenuBarPopoverView: View {
     @State private var selectedSourceID = ""
     @State private var setupName = ""
     @State private var savedSetupName: String?
+    @State private var isPresented = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     public init(store: AudioRouterStore, showMainWindow: @escaping () -> Void) {
         self.store = store
@@ -16,15 +19,8 @@ public struct MenuBarPopoverView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            header.padding(14)
-            systemControls.padding(.horizontal, 14).padding(.bottom, 12)
-            Picker("Quick controls", selection: $section) {
-                ForEach(MenuBarSection.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 14).padding(.bottom, 12)
+            header.padding(.horizontal, 18).padding(.vertical, 16)
+            navigation
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -36,18 +32,25 @@ public struct MenuBarPopoverView: View {
                     case .eq: equalizerControls
                     }
                 }
-                .padding(14)
+                .padding(18)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            footer.padding(.horizontal, 14).padding(.vertical, 10)
+            systemControls.padding(.horizontal, 18).padding(.vertical, 12)
+            footer.padding(.horizontal, 18).padding(.bottom, 12)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .tint(.teal)
+        .tint(accent)
         .preferredColorScheme(store.settings.effectiveColorScheme)
         .controlSize(.small)
-        .onAppear { synchronizeSource(); selectVolumeTarget() }
+        .opacity(isPresented ? 1 : 0)
+        .onAppear {
+            synchronizeSource()
+            selectVolumeTarget()
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) { isPresented = true }
+        }
+        .onDisappear { isPresented = false }
         .onChange(of: store.audioSources.map(\.id)) { _, _ in synchronizeSource() }
         .onChange(of: store.selectedSourceID) { _, id in
             if let id, store.audioSources.contains(where: { $0.id == id }) { selectedSourceID = id }
@@ -59,13 +62,42 @@ public struct MenuBarPopoverView: View {
         .onChange(of: store.activeUserProfile.id) { _, _ in savedSetupName = nil }
     }
 
+    private var navigation: some View {
+        HStack(spacing: 4) {
+            ForEach(MenuBarSection.allCases) { item in
+                Button { section = item } label: {
+                    VStack(spacing: 7) {
+                        HStack(spacing: 6) {
+                            Image(systemName: item.systemImage).font(.system(size: 12, weight: .medium))
+                            Text(item.rawValue).font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(section == item ? accent : Color.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(section == item ? accent : .clear)
+                            .frame(height: 2)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.rawValue)
+                .accessibilityAddTraits(section == item ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
-            AudioRouterLogo(size: 32)
+            AudioRouterLogo(size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("AudioRouter").font(.system(size: 16, weight: .bold))
-                Text(store.settings.demoMode ? "Demo Mode" : "\(store.activeLiveRouteCount) live routes")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("AudioRouter").font(.system(size: 16, weight: .semibold))
+                HStack(spacing: 5) {
+                    Circle().fill(store.activeLiveRouteCount > 0 ? accent : Color.secondary.opacity(0.5))
+                        .frame(width: 5, height: 5)
+                    Text(store.settings.demoMode ? "Demo Mode" : "\(store.activeLiveRouteCount) live route\(store.activeLiveRouteCount == 1 ? "" : "s")")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 4)
             Menu {
@@ -84,6 +116,8 @@ public struct MenuBarPopoverView: View {
                     .frame(maxWidth: 150, alignment: .trailing)
             }
             .menuStyle(.borderlessButton)
+            .foregroundStyle(.primary)
+            .tint(.primary)
             .fixedSize(horizontal: false, vertical: true)
             .help("Switch profile")
             .accessibilityLabel("Profile: \(store.activeUserProfile.displayName)")
@@ -100,15 +134,16 @@ public struct MenuBarPopoverView: View {
                 Button("Quit AudioRouter", systemImage: "power") { NSApp.terminate(nil) }
             } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .foregroundStyle(.secondary)
             .help("More AudioRouter controls").accessibilityLabel("More AudioRouter controls")
         }
     }
 
     private var systemControls: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             HStack {
-                Text("System output").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
+                Label("System", systemImage: "speaker.wave.2").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
                 Menu {
                     ForEach(store.outputDevices) { device in
                         Button { store.setDefaultDevice(device) } label: {
@@ -121,6 +156,8 @@ public struct MenuBarPopoverView: View {
                         .font(.caption.weight(.medium)).lineLimit(1)
                 }
                 .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(.primary)
+                .tint(.primary)
                 .disabled(store.outputDevices.isEmpty)
                 .help("Change the system output for apps following macOS")
             }
@@ -132,7 +169,6 @@ public struct MenuBarPopoverView: View {
                               label: "System output volume", action: store.setSystemOutputVolume)
             }
         }
-        .padding(10).background(inset, in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder private var notices: some View {
@@ -141,7 +177,7 @@ public struct MenuBarPopoverView: View {
                 open(.dashboard)
                 store.showOnboarding()
             } label: { Label("Finish setup", systemImage: "checklist") }
-                .buttonStyle(.bordered).foregroundStyle(.primary)
+                .buttonStyle(MenuBarControlStyle())
         }
         if let error = store.lastError {
             SupportNote(note: error) { store.dismissUnsupportedNote() }
@@ -151,7 +187,7 @@ public struct MenuBarPopoverView: View {
                 Label("Version \(update.version) available", systemImage: "arrow.down.circle")
                     .font(.caption.weight(.semibold))
                 Spacer()
-                Button("View") { open(.settings) }.buttonStyle(.bordered).foregroundStyle(.primary)
+                Button("View") { open(.settings) }.buttonStyle(MenuBarControlStyle())
             }
         }
     }
@@ -166,7 +202,7 @@ public struct MenuBarPopoverView: View {
                 }
             } else {
                 emptyState("No apps configured", symbol: "app.dashed")
-                Button("Add App...") { open(.dashboard) }.buttonStyle(.bordered).foregroundStyle(.primary)
+                Button("Add App...") { open(.dashboard) }.buttonStyle(MenuBarControlStyle(prominent: true))
             }
         }
     }
@@ -183,15 +219,17 @@ public struct MenuBarPopoverView: View {
                     Text(store.routeOutputName(for: source)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                SourceMeterView(meterState: store.meterState, sourceID: source.id, barCount: 5, height: 13, color: .teal)
-                    .frame(width: 52)
+                MenuBarLevelMeter(meterState: store.meterState, target: .source(source.id))
+                    .frame(width: 70, height: 20)
                 Text(source.volume.roundedPercentDescription).font(.caption.monospacedDigit())
                     .frame(width: 38, alignment: .trailing)
-                Image(systemName: selectedSourceID == source.id ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selectedSourceID == source.id ? Color.teal : Color.secondary.opacity(0.5))
+                Image(systemName: selectedSourceID == source.id ? "checkmark" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(selectedSourceID == source.id ? accent : Color.secondary.opacity(0.5))
+                    .frame(width: 14)
             }
             .padding(10)
-            .background(selectedSourceID == source.id ? Color.teal.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(selectedSourceID == source.id ? accent.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -210,7 +248,14 @@ public struct MenuBarPopoverView: View {
                     }
                 }
                 Spacer(minLength: 4)
-                StatusLabel(text: store.routeStatus(for: source), status: store.statusStyle(for: source))
+                if store.isPreparingRoute(for: source) {
+                    ProgressView("Routing").controlSize(.small).font(.caption)
+                } else if source.followsSystemOutput {
+                    Text("System").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.vertical, 4).background(inset, in: RoundedRectangle(cornerRadius: 5))
+                } else {
+                    StatusLabel(text: store.routeStatus(for: source), status: store.statusStyle(for: source))
+                }
             }
             HStack(spacing: 8) {
                 Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
@@ -228,7 +273,8 @@ public struct MenuBarPopoverView: View {
                     }
                 }
                 .labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity)
-                SystemAirPlayPickerButton(compact: true)
+                .disabled(store.isPreparingRoute(for: source))
+                SystemAirPlayPickerButton(compact: true, adaptsToAppearance: true)
             }
             HStack(spacing: 8) {
                 iconButton(source.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
@@ -257,7 +303,8 @@ public struct MenuBarPopoverView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12).background(inset, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.bottom, 14)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private var outputControls: some View {
@@ -269,7 +316,7 @@ public struct MenuBarPopoverView: View {
                 HStack {
                     Text("AirPlay").font(.subheadline.weight(.semibold))
                     Spacer()
-                    SystemAirPlayPickerButton(compact: true)
+                    SystemAirPlayPickerButton(compact: true, adaptsToAppearance: true)
                 }
                 ForEach(store.airPlayRouteCandidates) { candidate in
                     HStack {
@@ -284,7 +331,7 @@ public struct MenuBarPopoverView: View {
                 Text("Group Play").font(.subheadline.weight(.semibold))
                 Spacer()
                 Button { store.createOutputGroup() } label: { Label("New Group", systemImage: "plus") }
-                    .buttonStyle(.bordered).foregroundStyle(.primary).disabled(store.outputDevices.isEmpty)
+                    .buttonStyle(MenuBarControlStyle()).disabled(store.outputDevices.isEmpty)
             }
             ForEach(store.outputGroups) { group in
                 VStack(alignment: .leading, spacing: 8) {
@@ -346,8 +393,8 @@ public struct MenuBarPopoverView: View {
                 }
                 .buttonStyle(.plain).accessibilityLabel("Select \(device.name) volume")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
-                DeviceMeterView(meterState: store.meterState, deviceID: device.uid, barCount: 5, height: 13, color: .teal)
-                    .frame(width: 52)
+                MenuBarLevelMeter(meterState: store.meterState, target: .device(device.id))
+                    .frame(width: 70, height: 20)
                 Menu {
                     Button("Set as System Output", systemImage: "speaker.wave.2") { store.setDefaultDevice(device) }
                         .disabled(device.isDefault)
@@ -370,7 +417,7 @@ public struct MenuBarPopoverView: View {
             }
         }
         .padding(10)
-        .background(isSelected ? Color.teal.opacity(0.10) : inset, in: RoundedRectangle(cornerRadius: 8))
+        .background(isSelected ? accent.opacity(0.10) : inset, in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var setupControls: some View {
@@ -379,7 +426,7 @@ public struct MenuBarPopoverView: View {
             HStack(spacing: 8) {
                 TextField("Setup name", text: $setupName).textFieldStyle(.roundedBorder).onSubmit { saveSetup() }
                 Button { saveSetup() } label: { Label("Save Current", systemImage: "square.and.arrow.down") }
-                    .buttonStyle(.bordered).foregroundStyle(.primary).disabled(setupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(MenuBarControlStyle(prominent: true)).disabled(setupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let savedSetupName {
                 Label("Saved \(savedSetupName)", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.teal)
@@ -394,7 +441,7 @@ public struct MenuBarPopoverView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
-                    Button("Apply") { store.applyPreset(preset) }.buttonStyle(.bordered).foregroundStyle(.primary)
+                    Button("Apply") { store.applyPreset(preset) }.buttonStyle(MenuBarControlStyle())
                 }.padding(.vertical, 5)
             }
         }
@@ -424,12 +471,11 @@ public struct MenuBarPopoverView: View {
             .environment(\.colorScheme, .dark)
             HStack {
                 Button { store.eqManager.reset() } label: { Label("Reset Flat", systemImage: "arrow.counterclockwise") }
-                    .buttonStyle(.bordered).foregroundStyle(.primary)
+                    .buttonStyle(MenuBarControlStyle())
                 Spacer()
                 Button { store.eqManager.saveCustomPreset() } label: { Label("Save Custom", systemImage: "square.and.arrow.down") }
-                    .buttonStyle(.bordered).foregroundStyle(.primary)
+                    .buttonStyle(MenuBarControlStyle(prominent: true))
             }
-            Text("EQ applies to audio routed through AudioRouter.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -440,13 +486,17 @@ public struct MenuBarPopoverView: View {
                 Text("by Alan").font(.system(size: 9, weight: .semibold))
             }.foregroundStyle(.primary.opacity(0.5)).accessibilityHidden(true)
             Spacer()
+            iconButton("stethoscope", label: "Reliability and diagnostics") { open(.advanced) }
+            iconButton("gearshape", label: "Settings") { open(.settings) }
             Button { open(section.destination) } label: {
-                Label("Open \(section.destination.rawValue)", systemImage: "arrow.up.right.square")
-            }.buttonStyle(.bordered).foregroundStyle(.primary)
+                Label("Open App", systemImage: "arrow.up.right.square")
+            }.buttonStyle(MenuBarControlStyle())
+                .help("Open \(section.destination.rawValue)")
         }
     }
 
     private var inset: Color { Color.primary.opacity(0.045) }
+    private var accent: Color { colorScheme == .dark ? Color(red: 0.36, green: 0.80, blue: 0.75) : Color(red: 0.08, green: 0.47, blue: 0.44) }
     private var selectedSource: AudioSource? {
         store.audioSources.first { $0.id == selectedSourceID } ?? store.audioSources.first
     }
@@ -485,21 +535,44 @@ public struct MenuBarPopoverView: View {
             Text(title).font(.subheadline.weight(.semibold))
             Spacer()
             Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            iconButton("arrow.up.right.square", label: "Open \(title)") { open(destination) }
         }
     }
 
     private func volumeControl(_ value: Double?, enabled: Bool, label: String,
                                range: ClosedRange<Double> = 0...1, accent: Color = .teal,
                                action: @escaping (Double) -> Void) -> some View {
-        InlineVolumeSlider(value: value, isEnabled: enabled, systemImage: "slider.horizontal.3",
-                           range: range, step: 0.01, accent: accent, showsStepButtons: true, nudgeStep: 0.01,
-                           accessibilityLabel: label, accessibilityHint: "Adjust volume", onChange: action)
+        let current = min(range.upperBound, max(range.lowerBound, value ?? range.lowerBound))
+        let canAdjust = enabled && value != nil
+        return HStack(spacing: 8) {
+            iconButton("minus", label: "Decrease \(label) by 1%", enabled: canAdjust && current > range.lowerBound) {
+                action(max(range.lowerBound, current - 0.01))
+            }
+            Slider(value: Binding(get: { current }, set: { action(($0 * 100).rounded() / 100) }), in: range)
+                .tint(accent)
+                .disabled(!canAdjust)
+                .accessibilityLabel(label)
+                .accessibilityValue(value?.roundedPercentDescription ?? "Unavailable")
+                .accessibilityAdjustableAction { direction in
+                    guard canAdjust else { return }
+                    switch direction {
+                    case .increment: action(min(range.upperBound, current + 0.01))
+                    case .decrement: action(max(range.lowerBound, current - 0.01))
+                    @unknown default: break
+                    }
+                }
+            iconButton("plus", label: "Increase \(label) by 1%", enabled: canAdjust && current < range.upperBound) {
+                action(min(range.upperBound, current + 0.01))
+            }
+            Text(value?.roundedPercentDescription ?? "N/A")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(canAdjust ? .primary : .secondary)
+                .frame(width: 42, alignment: .trailing)
+        }
     }
 
     private func iconButton(_ symbol: String, label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).frame(width: 28, height: 28) }
-            .buttonStyle(.plain).background(inset, in: RoundedRectangle(cornerRadius: 6))
+            .buttonStyle(MenuBarControlStyle(iconOnly: true))
             .disabled(!enabled).help(label).accessibilityLabel(label)
     }
 
@@ -512,6 +585,14 @@ public struct MenuBarPopoverView: View {
 private enum MenuBarSection: String, CaseIterable, Identifiable {
     case apps = "Apps", outputs = "Outputs", setups = "Setups", eq = "EQ"
     var id: String { rawValue }
+    var systemImage: String {
+        switch self {
+        case .apps: return "app.connected.to.app.below.fill"
+        case .outputs: return "speaker.wave.2"
+        case .setups: return "square.stack.3d.up"
+        case .eq: return "waveform"
+        }
+    }
     var destination: SettingsSection {
         switch self {
         case .apps: return .dashboard
@@ -519,5 +600,78 @@ private enum MenuBarSection: String, CaseIterable, Identifiable {
         case .setups: return .setups
         case .eq: return .eq
         }
+    }
+}
+
+private struct MenuBarControlStyle: ButtonStyle {
+    var prominent = false
+    var iconOnly = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        MenuBarControlBody(configuration: configuration, prominent: prominent, iconOnly: iconOnly)
+    }
+}
+
+private struct MenuBarLevelMeter: View {
+    enum Target {
+        case source(String)
+        case device(String)
+    }
+
+    @ObservedObject var meterState: AudioMeterState
+    let target: Target
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var level: Double {
+        let value: Double
+        switch target {
+        case .source(let id): value = meterState.snapshot.sourceMeters[id] ?? 0
+        case .device(let id): value = meterState.snapshot.deviceMeters[id] ?? 0
+        }
+        return min(1, max(0, value))
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.primary.opacity(0.12))
+                Rectangle().fill(Color.teal)
+                    .frame(width: proxy.size.width * level)
+            }
+            .frame(height: 3)
+            .frame(maxHeight: .infinity)
+        }
+        .animation(reduceMotion ? nil : .linear(duration: 0.10), value: level)
+        .accessibilityLabel("Audio level")
+        .accessibilityValue(level.roundedPercentDescription)
+    }
+}
+
+private struct MenuBarControlBody: View {
+    let configuration: ButtonStyleConfiguration
+    let prominent: Bool
+    let iconOnly: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    private var accent: Color {
+        colorScheme == .dark ? Color(red: 0.36, green: 0.80, blue: 0.75) : Color(red: 0.08, green: 0.47, blue: 0.44)
+    }
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, iconOnly ? 0 : 10)
+            .frame(minHeight: 28)
+            .foregroundStyle(prominent ? (colorScheme == .dark ? Color.black : .white) : .primary)
+            .background(prominent ? accent.opacity(configuration.isPressed ? 0.7 : 1) : Color.primary.opacity(configuration.isPressed ? 0.12 : (hovering ? 0.08 : 0.045)), in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: hovering)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: configuration.isPressed)
     }
 }

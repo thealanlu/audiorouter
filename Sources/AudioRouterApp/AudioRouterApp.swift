@@ -64,9 +64,6 @@ private struct MainWindowSceneContent: View {
         MainWindowView(store: store)
             .background(MainWindowRegistrationView(coordinator: coordinator))
             .modifier(MainWindowActionRegistration(coordinator: coordinator))
-            .onAppear {
-                store.start()
-            }
     }
 }
 
@@ -118,10 +115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.store?.applyActivationPolicy()
-        Self.store?.start()
         installReopenEventHandler()
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
+            Self.store?.start()
         }
     }
 

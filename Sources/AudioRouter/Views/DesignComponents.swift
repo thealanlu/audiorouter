@@ -394,11 +394,12 @@ private final class BorderlessSidebarToolbarButton: NSButton {
 struct SystemAirPlayPickerButton: View {
     var title: String = "AirPlay"
     var compact = false
+    var adaptsToAppearance = false
 
     var body: some View {
         HStack(spacing: 7) {
 #if canImport(AVKit)
-            AirPlayRoutePickerRepresentable()
+            AirPlayRoutePickerRepresentable(adaptsToAppearance: adaptsToAppearance)
                 .frame(width: 18, height: 18)
                 .accessibilityLabel("Open macOS AirPlay route picker")
 #else
@@ -415,12 +416,12 @@ struct SystemAirPlayPickerButton: View {
         }
         .padding(.horizontal, compact ? 5 : 10)
         .frame(height: 28)
-        .background(ConsolePalette.strip.opacity(0.82), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(adaptsToAppearance ? Color.primary.opacity(0.045) : ConsolePalette.strip.opacity(0.82), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(ConsolePalette.teal.opacity(0.36), lineWidth: 1)
         }
-        .foregroundStyle(.white.opacity(0.86))
+        .foregroundStyle(adaptsToAppearance ? Color.primary : .white.opacity(0.86))
         .help("Open the macOS AirPlay picker for TV, HomePod, and other routes that may not appear as Core Audio devices until selected.")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Open AirPlay output picker")
@@ -430,11 +431,13 @@ struct SystemAirPlayPickerButton: View {
 
 #if canImport(AVKit)
 private struct AirPlayRoutePickerRepresentable: NSViewRepresentable {
+    let adaptsToAppearance: Bool
+
     func makeNSView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView(frame: .zero)
         view.isRoutePickerButtonBordered = false
-        view.setRoutePickerButtonColor(NSColor.white.withAlphaComponent(0.86), for: .normal)
-        view.setRoutePickerButtonColor(NSColor.white, for: .normalHighlighted)
+        view.setRoutePickerButtonColor(adaptsToAppearance ? .labelColor : .white.withAlphaComponent(0.86), for: .normal)
+        view.setRoutePickerButtonColor(adaptsToAppearance ? .labelColor : .white, for: .normalHighlighted)
         view.setRoutePickerButtonColor(NSColor.systemTeal, for: .active)
         view.setRoutePickerButtonColor(NSColor.systemTeal, for: .activeHighlighted)
         view.setContentHuggingPriority(.required, for: .horizontal)
